@@ -1,0 +1,27 @@
+{
+    "Time_spent_Alone": {
+        "introvert": 8.0,
+        "ambivert": 4.0,
+        "extrovert": 2.0
+    },
+    "Social_event_attendance": {
+        "introvert": 1.0,
+        "ambivert": 3.0,
+        "extrovert": 7.0
+    },
+    "Going_outside": {
+        "introvert": 1.0,
+        "ambivert": 3.0,
+        "extrovert": 5.0
+    },
+    "Friends_circle_size": {
+        "introvert": 2.0,
+        "ambivert": 5.0,
+        "extrovert": 10.0
+    },
+    "Post_frequency": {
+        "introvert": 1.0,
+        "ambivert": 3.0,
+        "extrovert": 7.0
+    }
+}
