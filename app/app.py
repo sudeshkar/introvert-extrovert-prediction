@@ -1,178 +1,212 @@
 import streamlit as st
+import pandas as pd
 import polars as pl
-import joblib
 import numpy as np
+import joblib
+import os
 import matplotlib.pyplot as plt
 from fpdf import FPDF
 import tempfile
-import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
-import os
+from Feature_engineering import FeatureEngineering
+import plotly.graph_objects as go
 
-# Custom feature engineering transformer
-class FeatureEngineering(BaseEstimator, TransformerMixin):
-    def __init__(self):
-        pass
-    
-    def fit(self, X, y=None):
-        # No fitting needed for this simple transformer
-        return self
-
-    def transform(self, X):
-        # Make a copy to avoid modifying original
-        X = X.copy()
-
-        # One-hot encode 'Stage_fear'
-        if 'Stage_fear' in X.columns:
-            dummies = pd.get_dummies(X['Stage_fear'], prefix='Stage_fear')
-            X = pd.concat([X.drop(columns=['Stage_fear']), dummies], axis=1)
-
-        # One-hot encode 'Drained_after_socializing'
-        if 'Drained_after_socializing' in X.columns:
-            dummies = pd.get_dummies(X['Drained_after_socializing'], prefix='Drained_after_socializing')
-            X = pd.concat([X.drop(columns=['Drained_after_socializing']), dummies], axis=1)
-
-        # Make sure all expected columns exist (add missing columns filled with 0)
-        expected_cols = [
-            'Time_spent_Alone',
-            'Social_event_attendance',
-            'Going_outside',
-            'Friends_circle_size',
-            'Post_frequency',
-            'Stage_fear_No',
-            'Stage_fear_Yes',
-            'Drained_after_socializing_No',
-            'Drained_after_socializing_Yes'
-        ]
-        for col in expected_cols:
-            if col not in X.columns:
-                X[col] = 0
-
-        # Reorder columns exactly as expected by model
-        X = X[expected_cols]
-
-        return X
-
-# Load pipeline with model and feature engineering
+# Load the trained pipeline
 @st.cache_resource
-def load_pipeline():
-    # Load your full sklearn pipeline (with FeatureEngineering + XGB model)
-    return joblib.load("../models/personality_prediction_model.pkl")
+def load_model():
+    return joblib.load("../models/personality_prediction_model2.pkl")
 
-pipeline = load_pipeline()
+pipeline = load_model()
+st.set_page_config(page_title="HR Personality Predictor", layout="centered")
 
-# Prediction function
-def predict(df):
-    # Convert polars DataFrame to pandas if needed
-    if isinstance(df, pl.DataFrame):
-        df = df.to_pandas()
-
-    # Map "Yes"/"No" to strings for transformer to handle one-hot encoding
-    for col in ['Stage_fear', 'Drained_after_socializing']:
-        if col in df.columns and df[col].dtype != object:
-            df[col] = df[col].map({1: "Yes", 0: "No"})
-
-    preds = pipeline.predict(df)
-    probs = pipeline.predict_proba(df)[:, 1]
-    labels = ['Extrovert' if p == 1 else 'Introvert' for p in preds]
-    return labels, probs
-
-# Radar chart plot
-def plot_radar(row, label):
-    categories = ['Time_spent_Alone', 'Social_event_attendance', 'Going_outside',
-                  'Friends_circle_size', 'Post_frequency']
-    values = row[categories].values.flatten().tolist()
-    values += values[:1]  # Close the loop
-
-    angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
-    angles += angles[:1]
-
-    fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
-    ax.plot(angles, values, color='blue', linewidth=2)
-    ax.fill(angles, values, color='skyblue', alpha=0.25)
-    ax.set_thetagrids(np.degrees(angles[:-1]), categories)
-    ax.set_title(f"Personality Radar - {label}", fontsize=14)
-    ax.set_ylim(0, max(values) + 1)
-    return fig
-
-# PDF report generator
-def generate_pdf(name, label, confidence):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(200, 10, "Personality Prediction Summary", ln=True, align="C")
-    pdf.set_font("Arial", size=12)
-    pdf.ln(10)
-    pdf.cell(100, 10, f"Name: {name}")
-    pdf.ln(10)
-    pdf.cell(100, 10, f"Prediction: {label}")
-    pdf.ln(10)
-    pdf.cell(100, 10, f"Confidence: {confidence*100:.2f}%")
-    pdf.ln(10)
-
-    tmp_path = os.path.join(tempfile.gettempdir(), f"{name}_summary.pdf")
-    pdf.output(tmp_path)
-    return tmp_path
-
-# Streamlit UI
+# --- Title and Mode Switch ---
 st.title("🧠 HR Personality Predictor")
+st.markdown("Upload a CSV or manually enter details to predict if someone is an **Introvert** or **Extrovert**.")
 
-option = st.radio("Choose Input Method", ["📄 CSV Upload", "📝 Manual Entry"])
+input_mode = st.radio("Choose Input Method", ["Manual Input", "CSV Upload"])
+def plot_radar_chart(features_dict: dict, personality: str):
+                            categories = list(features_dict.keys())
+                            values = list(features_dict.values())
 
-if option == "📄 CSV Upload":
-    file = st.file_uploader("Upload CSV", type=["csv"])
-    if file:
-        df = pl.read_csv(file)
-        labels, probs = predict(df)
+                            # Repeat first element to close the loop in radar chart
+                            values += values[:1]
+                            categories += categories[:1]
 
-        result_df = df.with_columns([
-            pl.Series("Prediction", labels),
-            pl.Series("Confidence", [f"{p*100:.2f}%" for p in probs])
-        ])
+                            fig = go.Figure(
+                                data=[
+                                    go.Scatterpolar(
+                                        r=values,
+                                        theta=categories,
+                                        fill='toself',
+                                        name='Traits',
+                                        line=dict(color='royalblue')
+                                    )
+                                ]
+                            )
 
-        st.dataframe(result_df)
+                            fig.update_layout(
+                                polar=dict(
+                                    radialaxis=dict(
+                                        visible=True,
+                                        range=[0, 10]  # You can adjust this based on your feature scale
+                                    )
+                                ),
+                                showlegend=False,
+                                title=f"Personality: {personality}"
+                            )
+                            return fig
 
-        csv_bytes = result_df.write_csv().encode("utf-8")
-        st.download_button("⬇ Download Predictions (CSV)", data=csv_bytes, file_name="predictions.csv")
+# --- Manual Input Mode ---
+if input_mode == "Manual Input":
+    st.subheader("📝 Enter Person Details")
 
-        for i in range(min(3, len(result_df))):  # Show radar charts for first 3 samples
-            st.subheader(f"Radar for Sample {i+1}")
-            fig = plot_radar(df[i].to_pandas(), labels[i])
-            st.pyplot(fig)
+    with st.form("prediction_form"):
+        time_spent_alone = st.slider("Time spent alone (1–10)", 1, 10, 5)
+        stage_fear = st.selectbox("Stage fear?", ["Yes", "No"])
+        social_event_attendance = st.slider("Social event attendance (1–10)", 1, 10, 5)
+        going_outside = st.slider("Going outside (1–10)", 1, 10, 5)
+        drained_after_socializing = st.selectbox("Drained after socializing?", ["Yes", "No"])
+        friends_circle_size = st.slider("Friends circle size (1–10)", 1, 10, 5)
+        post_frequency = st.slider("Post frequency (1–10)", 1, 10, 5)
 
-            pdf_path = generate_pdf(f"Sample_{i+1}", labels[i], probs[i])
-            with open(pdf_path, "rb") as f:
-                st.download_button(
-                    label=f"⬇ Download Summary PDF for Sample {i+1}",
-                    data=f,
-                    file_name=f"summary_{i+1}.pdf"
-                )
+        submit_btn = st.form_submit_button("Predict Personality")
 
+        if submit_btn:
+            with st.spinner("Predicting..."):
+                try:
+                    raw_input_dict = {
+                        "Time_spent_Alone": time_spent_alone,
+                        "Stage_fear": stage_fear,
+                        "Social_event_attendance": social_event_attendance,
+                        "Going_outside": going_outside,
+                        "Drained_after_socializing": drained_after_socializing,
+                        "Friends_circle_size": friends_circle_size,
+                        "Post_frequency": post_frequency,
+                    }
+
+                    input_df = pl.DataFrame([raw_input_dict])
+                    
+                    # Get feature names from model
+                    xgb_model = pipeline.named_steps["xgb_classifier"]
+                    expected_features = xgb_model.feature_names_in_
+
+                    # Transform the input using the pipeline up to the feature_engineering step
+                    transformed = pipeline.named_steps["feature_engineering"].transform(input_df)
+
+                    # Ensure all expected columns exist in the transformed DataFrame
+                    for col in expected_features:
+                        if col not in transformed.columns:
+                            transformed = transformed.with_columns(pl.lit(0).alias(col))
+
+                    # Reorder columns to match the model input
+                    transformed = transformed.select(expected_features)
+
+                    # Predict
+                    prediction = xgb_model.predict(transformed.to_pandas())[0]
+                    result = "Extrovert" if prediction == 1 else "Introvert"
+
+                    result = "Extrovert" if prediction == 1 else "Introvert"
+
+                    st.success(f"🎯 Predicted Personality: **{result}**")
+                    st.balloons()
+
+                    # Convert binary Yes/No to numeric for plotting
+                    binary_map = {"Yes": 1, "No": 0}
+
+                    # Prepare feature values for radar chart
+                    radar_features = {
+                        "Time Alone": time_spent_alone,
+                        "Social Events": social_event_attendance,
+                        "Going Outside": going_outside,
+                        "Friend Circle Size": friends_circle_size,
+                        "Post Frequency": post_frequency,
+                        "Drained After Socializing": binary_map.get(drained_after_socializing, 0)
+                    }
+
+                    # Show radar chart
+                    st.subheader("🧭 Behavioral Radar Chart")
+                    radar_fig = plot_radar_chart(radar_features, result)
+                    st.plotly_chart(radar_fig, use_container_width=True)
+
+
+                except Exception as e:
+                    st.error(f"Prediction error: {str(e)}")
+                    st.write("Debug - Input DataFrame Columns:", input_df.columns)
+                    st.write("Debug - Input DataFrame Shape:", input_df.shape)
+                    st.write(input_df)
+
+# --- CSV Upload Mode ---
 else:
-    st.subheader("Manual Entry Form")
+    st.subheader("📤 Upload CSV File")
+    uploaded_file = st.file_uploader("Upload a CSV with the correct format", type=["csv"])
 
-    manual_input = {
-        "Time_spent_Alone": st.slider("Time spent alone (hours)", 0, 12, 6),
-        "Social_event_attendance": st.slider("Events attended/week", 0, 10, 3),
-        "Going_outside": st.slider("Days outside/week", 0, 7, 3),
-        "Friends_circle_size": st.slider("Friends in circle", 0, 15, 5),
-        "Post_frequency": st.slider("Posts per week", 0, 10, 2),
-        "Stage_fear": st.selectbox("Do you have stage fear?", ["Yes", "No"]),
-        "Drained_after_socializing": st.selectbox("Feel drained after socializing?", ["Yes", "No"]),
-    }
+    if uploaded_file:
+        df_raw = pl.read_csv(uploaded_file)
 
-    if st.button("Predict"):
-        input_df = pl.DataFrame([manual_input])
-        label, prob = predict(input_df)
-        st.success(f"🎯 Prediction: {label[0]} ({prob[0]*100:.2f}% confidence)")
+        required_cols = [
+            "id", "Time_spent_Alone", "Stage_fear", "Social_event_attendance",
+            "Going_outside", "Drained_after_socializing", "Friends_circle_size", "Post_frequency"
+        ]
+        if not all(col in df_raw.columns for col in required_cols):
+            st.error("❌ CSV must contain the following columns:\n" + ", ".join(required_cols))
+        else:
+            st.write("📄 Data Preview:")
+            st.dataframe(df_raw.head().to_pandas())
 
-        fig = plot_radar(input_df.to_pandas(), label[0])
-        st.pyplot(fig)
+            if st.button("🔮 Predict for All"):
+                with st.spinner("Running predictions..."):
+                    try:
+                        ids = df_raw["id"]
+                        input_df = df_raw.drop("id")
 
-        pdf_path = generate_pdf("Manual_User", label[0], prob[0])
-        with open(pdf_path, "rb") as f:
-            st.download_button(
-                label="⬇ Download Personality PDF",
-                data=f,
-                file_name="summary_manual.pdf"
-            )
+                        preds = pipeline.predict(input_df)
+                        personalities = ["Extrovert" if p == 1 else "Introvert" for p in preds]
+
+                        final = pl.DataFrame({
+                            "id": ids,
+                            "Personality": pl.Series(personalities)
+                        })
+
+                        st.success("✅ Prediction Complete!")
+                        st.dataframe(final)
+                        st.balloons()
+
+
+
+                        # 📊 Chart
+                        st.subheader("📊 Personality Distribution")
+                        fig, ax = plt.subplots()
+                        pd.Series(personalities).value_counts().plot(kind="bar", ax=ax, color=["skyblue", "orange"])
+                        ax.set_ylabel("Count")
+                        ax.set_title("Predicted Personality")
+                        st.pyplot(fig)
+
+                        # ⬇️ CSV Download
+                        df_result = final.to_pandas()
+                        csv_bytes = df_result.to_csv(index=False).encode("utf-8")
+                        st.download_button("⬇️ Download CSV", csv_bytes, file_name="personality_predictions.csv", mime="text/csv")
+
+                        # 📄 PDF Report Generator
+                        def generate_pdf(data: pd.DataFrame):
+                            pdf = FPDF()
+                            pdf.add_page()
+                            pdf.set_font("Arial", size=12)
+                            pdf.cell(200, 10, "Personality Prediction Report", ln=True, align="C")
+                            pdf.ln(10)
+                            for i, row in data.iterrows():
+                                summary = f"{i+1}. ID: {row['id']}, Personality: {row['Personality']}"
+                                pdf.multi_cell(0, 10, summary)
+                                pdf.ln(2)
+                            tmp_path = tempfile.mktemp(suffix=".pdf")
+                            pdf.output(tmp_path)
+                            return tmp_path
+
+
+                        pdf_path = generate_pdf(df_result)
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("📄 Download PDF Report", f, file_name="personality_report.pdf", mime="application/pdf")
+
+                    except Exception as e:
+                        st.error(f"Prediction error: {str(e)}")
+                        st.write("Debug - Data Columns:", input_df.columns)
+                        st.write("Debug - Data Shape:", input_df.shape)
+                    
