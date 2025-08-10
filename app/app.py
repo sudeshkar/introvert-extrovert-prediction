@@ -10,7 +10,7 @@ import tempfile
 from Feature_engineering import FeatureEngineering
 import plotly.graph_objects as go
 
-# Load the trained pipeline
+# Loading trained pipeline
 @st.cache_resource
 def load_model():
     return joblib.load("../models/personality_prediction_model2.pkl")
@@ -18,42 +18,44 @@ def load_model():
 pipeline = load_model()
 st.set_page_config(page_title="HR Personality Predictor", layout="centered")
 
-# --- Title and Mode Switch ---
+
 st.title("🧠 HR Personality Predictor")
 st.markdown("Upload a CSV or manually enter details to predict if someone is an **Introvert** or **Extrovert**.")
 
 input_mode = st.radio("Choose Input Method", ["Manual Input", "CSV Upload"])
+
 def plot_radar_chart(features_dict: dict, personality: str):
-                            categories = list(features_dict.keys())
-                            values = list(features_dict.values())
+    categories = list(features_dict.keys())
+    values = list(features_dict.values())
 
-                            # Repeat first element to close the loop in radar chart
-                            values += values[:1]
-                            categories += categories[:1]
+    
+    values += values[:1]
+    categories += categories[:1]
 
-                            fig = go.Figure(
-                                data=[
-                                    go.Scatterpolar(
-                                        r=values,
-                                        theta=categories,
-                                        fill='toself',
-                                        name='Traits',
-                                        line=dict(color='royalblue')
-                                    )
-                                ]
-                            )
+    fig = go.Figure(
+        data=[
+            go.Scatterpolar(
+                r=values,
+                theta=categories,
+                fill='toself',
+                name='Traits',
+                line=dict(color='royalblue')
+            )
+        ]
+    )
 
-                            fig.update_layout(
-                                polar=dict(
-                                    radialaxis=dict(
-                                        visible=True,
-                                        range=[0, 10]  # You can adjust this based on your feature scale
-                                    )
-                                ),
-                                showlegend=False,
-                                title=f"Personality: {personality}"
-                            )
-                            return fig
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 10] 
+            )
+        ),
+        showlegend=False,
+        title=f"Personality: {personality}"
+    )
+    return fig
+
 
 # --- Manual Input Mode ---
 if input_mode == "Manual Input":
@@ -84,27 +86,26 @@ if input_mode == "Manual Input":
                     }
 
                     input_df = pl.DataFrame([raw_input_dict])
-                    
-                    # Get feature names from model
                     xgb_model = pipeline.named_steps["xgb_classifier"]
                     expected_features = xgb_model.feature_names_in_
-
                     # Transform the input using the pipeline up to the feature_engineering step
                     transformed = pipeline.named_steps["feature_engineering"].transform(input_df)
 
-                    # Ensure all expected columns exist in the transformed DataFrame
+                    
                     for col in expected_features:
                         if col not in transformed.columns:
                             transformed = transformed.with_columns(pl.lit(0).alias(col))
 
-                    # Reorder columns to match the model input
+                  
                     transformed = transformed.select(expected_features)
-
-                    # Predict
-                    prediction = xgb_model.predict(transformed.to_pandas())[0]
+                    prediction = xgb_model.predict(transformed.to_pandas())
+                    
+                    
                     result = "Extrovert" if prediction == 1 else "Introvert"
-
-                    result = "Extrovert" if prediction == 1 else "Introvert"
+                    
+                    
+                    # st.write(f"Debug - Raw prediction: {raw_prediction} (type: {type(raw_prediction)})")
+                    # st.write(f"Debug - Processed prediction: {numeric_pred} -> {result}")
 
                     st.success(f"🎯 Predicted Personality: **{result}**")
                     st.balloons()
@@ -127,12 +128,15 @@ if input_mode == "Manual Input":
                     radar_fig = plot_radar_chart(radar_features, result)
                     st.plotly_chart(radar_fig, use_container_width=True)
 
-
                 except Exception as e:
                     st.error(f"Prediction error: {str(e)}")
                     st.write("Debug - Input DataFrame Columns:", input_df.columns)
                     st.write("Debug - Input DataFrame Shape:", input_df.shape)
-                    st.write(input_df)
+                    st.write("Debug - Pipeline type:", type(pipeline))
+                    if hasattr(pipeline, 'named_steps'):
+                        st.write("Debug - Pipeline steps:", list(pipeline.named_steps.keys()))
+                    st.write("Debug - Input DataFrame:")
+                    st.write(input_df.to_pandas())
 
 # --- CSV Upload Mode ---
 else:
@@ -158,9 +162,29 @@ else:
                         ids = df_raw["id"]
                         input_df = df_raw.drop("id")
 
-                        preds = pipeline.predict(input_df)
-                        personalities = ["Extrovert" if p == 1 else "Introvert" for p in preds]
+                        # Step 1: Transform using feature_engineering (like manual input)
+                        transformed = pipeline.named_steps["feature_engineering"].transform(input_df)
 
+                        # Step 2: Ensure all expected features exist for XGB
+                        xgb_model = pipeline.named_steps["xgb_classifier"]
+                        expected_features = xgb_model.feature_names_in_
+
+                        for col in expected_features:
+                            if col not in transformed.columns:
+                                transformed = transformed.with_columns(pl.lit(0).alias(col))
+
+                        transformed = transformed.select(expected_features)
+
+                        # Step 3: Predict
+                        raw_preds = xgb_model.predict(transformed.to_pandas())
+
+                        # Step 4: Map predictions
+                        def map_pred(pred):
+                            return "Extrovert" if pred == 1 else "Introvert"
+
+                        personalities = [map_pred(p) for p in raw_preds]
+
+                        # Step 5: Prepare output DataFrame
                         final = pl.DataFrame({
                             "id": ids,
                             "Personality": pl.Series(personalities)
@@ -168,11 +192,8 @@ else:
 
                         st.success("✅ Prediction Complete!")
                         st.dataframe(final)
-                        st.balloons()
 
-
-
-                        # 📊 Chart
+                        # Chart
                         st.subheader("📊 Personality Distribution")
                         fig, ax = plt.subplots()
                         pd.Series(personalities).value_counts().plot(kind="bar", ax=ax, color=["skyblue", "orange"])
@@ -180,12 +201,12 @@ else:
                         ax.set_title("Predicted Personality")
                         st.pyplot(fig)
 
-                        # ⬇️ CSV Download
+                        # Download CSV
                         df_result = final.to_pandas()
                         csv_bytes = df_result.to_csv(index=False).encode("utf-8")
                         st.download_button("⬇️ Download CSV", csv_bytes, file_name="personality_predictions.csv", mime="text/csv")
 
-                        # 📄 PDF Report Generator
+                        # PDF Report
                         def generate_pdf(data: pd.DataFrame):
                             pdf = FPDF()
                             pdf.add_page()
@@ -200,7 +221,6 @@ else:
                             pdf.output(tmp_path)
                             return tmp_path
 
-
                         pdf_path = generate_pdf(df_result)
                         with open(pdf_path, "rb") as f:
                             st.download_button("📄 Download PDF Report", f, file_name="personality_report.pdf", mime="application/pdf")
@@ -209,4 +229,3 @@ else:
                         st.error(f"Prediction error: {str(e)}")
                         st.write("Debug - Data Columns:", input_df.columns)
                         st.write("Debug - Data Shape:", input_df.shape)
-                    
